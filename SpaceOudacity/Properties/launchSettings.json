@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "SpaceOudacity (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "SpaceOudacity (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
