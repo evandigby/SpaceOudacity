@@ -2,10 +2,12 @@ using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
+using NAudio.Midi;
+using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 using System;
 using System.Numerics;
-using Windows.Devices.Enumeration;
-using Windows.Devices.Midi;
+using Windows.Foundation;
 using Windows.Storage;
 using Windows.Storage.Streams;
 using Windows.UI;
@@ -21,11 +23,11 @@ namespace SpaceOudacity
     public sealed partial class MainWindow : Window
     {
         private const int maxHue = 359;
-        private readonly DeviceWatcher deviceWatcher;
-        private readonly string deviceFilter = MidiOutPort.GetDeviceSelector();
-        private IMidiOutPort midiOutPort;
+        private readonly MidiOut midiOutPort;
         private readonly double minHueWavelength = HueToWavelength(0);
         private readonly double minMaxHueWaveLengthDelta = HueToWavelength(maxHue) - HueToWavelength(0);
+        private readonly WaveOutEvent waveOut = new WaveOutEvent();
+        private MixingSampleProvider mixer;
 
         private CanvasBitmap canvasBitmap;
 
@@ -33,40 +35,11 @@ namespace SpaceOudacity
         public MainWindow()
         {
             InitializeComponent();
-            UpdateColor(colorPicker.Color);
+            //UpdateColorPosition(colorPicker.Color);
 
-            deviceWatcher = DeviceInformation.CreateWatcher(deviceFilter);
-            deviceWatcher.EnumerationCompleted += DeviceWatcher_EnumerationCompleted;
-            deviceWatcher.Added += DeviceWatcher_Added;
-            deviceWatcher.Start();
             colorPicker.Color = Colors.Red;
-        }
 
-        public Color CurrentColor { get; set; }
-
-        private void DeviceWatcher_Added(DeviceWatcher sender, DeviceInformation args)
-        {
-
-        }
-
-        private async void DeviceWatcher_EnumerationCompleted(DeviceWatcher sender, object args)
-        {
-            var devices = await DeviceInformation.FindAllAsync(deviceFilter);
-            if (devices.Count == 0)
-            {
-                return;
-            }
-
-            var currentOutPort = await MidiOutPort.FromIdAsync(devices[0].Id);
-
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                if (midiOutPort != null)
-                {
-                    midiOutPort.Dispose();
-                }
-                midiOutPort = currentOutPort;
-            });
+            midiOutPort = new(0);
         }
 
         private async void canvas_Draw(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.Xaml.CanvasDrawEventArgs args)
@@ -80,18 +53,45 @@ namespace SpaceOudacity
             }
         }
 
-        private void colorPicker_ColorChanged(Microsoft.UI.Xaml.Controls.ColorPicker sender, Microsoft.UI.Xaml.Controls.ColorChangedEventArgs args)
-        {
-            DispatcherQueue.TryEnqueue(() => UpdateColor(args.NewColor));
-        }
+        //private void colorPicker_ColorChanged(Microsoft.UI.Xaml.Controls.ColorPicker sender, Microsoft.UI.Xaml.Controls.ColorChangedEventArgs args)
+        //{
+        //    DispatcherQueue.TryEnqueue(() => UpdateColorPosition(args.NewColor));
+        //}
 
 
-        private MidiNoteOnMessage ColorToMidiNote(Color color)
+        private NoteOnEvent ColorToNote(Color color)
         {
             var (h, s, v) = RGBToHSV(color);
             var wave = HueToWavelength(h); ;
             var note = LightWaveToMidiNote(wave);
-            return new MidiNoteOnMessage(10, note, (byte)((s + v) / 2 * 127));
+            return new NoteOnEvent(0, 1, note, (int)((s + v) / 2 * 127), 1);
+        }
+
+        private ISampleProvider ColorToSignal(Color color)
+        {
+            var (h, s, v) = RGBToHSV(color);
+            var wave = HueToWavelength(h); ;
+            return LightWaveToSignal(wave);
+        }
+
+        private ISampleProvider LightWaveToSignal(double wavelength)
+        {
+            var minimized = wavelength - minHueWavelength;
+
+            var waveRatio = minimized / minMaxHueWaveLengthDelta;
+
+            const double pianoMinFrequency = 27.5d;
+            const double pianoMaxFrequency = 4186.009d;
+            const double pianoDelta = pianoMaxFrequency - pianoMinFrequency;
+
+            var frequency = (waveRatio * pianoDelta) - pianoMinFrequency;
+
+            return new SignalGenerator()
+            {
+                Gain = 0.2,
+                Frequency = frequency,
+                Type = SignalGeneratorType.Sin,
+            }.Take(TimeSpan.FromSeconds(5));
         }
 
         private byte LightWaveToMidiNote(double wavelength)
@@ -104,24 +104,45 @@ namespace SpaceOudacity
             const int piano1Key = 21;
             const int pianoDelta = piano88Key - piano1Key;
 
-
             return (byte)(((double)pianoDelta * waveRatio) + piano1Key);
         }
 
         private static double HueToWavelength(double hue) => 650d - (250d / maxHue * hue);
 
-        private void UpdateColor(Color newColor)
+        private void UpdateColorPosition(Color newColor, Point point, Point maxPosition)
         {
-            CurrentColor = newColor;
+            colorPicker.Color = newColor;
 
-            var (h, _, _) = RGBToHSV(CurrentColor);
+            var signal = ColorToSignal(newColor);
 
-            var midiNote = ColorToMidiNote(newColor);
-            canvas.Invalidate();
-            if (midiOutPort != null)
+            var scaleWidth = point.X / maxPosition.X;
+            var stereo = new PanningSampleProvider(signal.ToMono())
             {
-                midiOutPort.SendMessage(midiNote);
+                Pan = (2 * (float)scaleWidth) - 1
+            };
+
+            mixer ??= new MixingSampleProvider(stereo.WaveFormat);
+
+            mixer.AddMixerInput(stereo);
+
+            if (waveOut.PlaybackState != PlaybackState.Playing)
+            {
+                waveOut.Init(mixer);
+                waveOut.Play();
             }
+
+            //if (midiOutPort != null)
+            //{
+            //    var midiNote = ColorToNote(newColor);
+            //    var scaleWidth = point.X / maxPosition.X;
+            //    var pan = scaleWidth * 127;
+
+            //    var control = new ControlChangeEvent(0, 1, MidiController.Pan, (int)pan);
+
+            //    midiOutPort.Send(control.GetAsShortMessage());
+            //    midiOutPort.Send(midiNote.GetAsShortMessage());
+            //}
+            canvas.Invalidate();
         }
         public static (double, double, double) RGBToHSV(Color rgb)
         {
@@ -193,7 +214,7 @@ namespace SpaceOudacity
 
             var pixelColor = pixelColors[0];
 
-            DispatcherQueue.TryEnqueue(() => colorPicker.Color = pixelColors[0]);
+            DispatcherQueue.TryEnqueue(() => UpdateColorPosition(pixelColors[0], point.Position, new Point(canvasSender.ActualWidth, canvasSender.ActualHeight)));
         }
     }
 }

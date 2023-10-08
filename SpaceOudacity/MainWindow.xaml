@@ -18,7 +18,7 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <ColorPicker x:Name="colorPicker" Grid.Row="0" Grid.Column="0" ColorSpectrumShape="Box" ColorChanged="colorPicker_ColorChanged" MaxHue="359" ColorSpectrumComponents="HueValue" Color="{x:Bind CurrentColor, Mode=TwoWay}" />
+        <ColorPicker x:Name="colorPicker" Grid.Row="0" Grid.Column="0" ColorSpectrumShape="Box" MaxHue="359" ColorSpectrumComponents="HueValue" />
         <canvas:CanvasControl x:Name="canvas" Draw="canvas_Draw" Grid.Row="0" Grid.Column="1" CreateResources="canvas_CreateResources" PointerPressed="canvas_PointerPressed" />
     </Grid>
 </Window>
