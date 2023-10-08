@@ -18,7 +18,10 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <ColorPicker x:Name="colorPicker" Grid.Row="0" Grid.Column="0" ColorSpectrumShape="Box" MaxHue="359" ColorSpectrumComponents="HueValue" />
+        <StackPanel Grid.Row="0" Grid.Column="0">
+            <ColorPicker x:Name="colorPicker" ColorSpectrumShape="Box" MaxHue="359" ColorSpectrumComponents="HueValue" />
+            <Button x:Name="playImage" Click="playImage_Click">Play Image</Button>
+        </StackPanel>
         <canvas:CanvasControl x:Name="canvas" Draw="canvas_Draw" Grid.Row="0" Grid.Column="1" CreateResources="canvas_CreateResources" PointerPressed="canvas_PointerPressed" />
     </Grid>
 </Window>
