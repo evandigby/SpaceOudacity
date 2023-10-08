@@ -1,9 +1,13 @@
-using Microsoft.Graphics.Canvas.Brushes;
+using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using System;
+using System.Numerics;
 using Windows.Devices.Enumeration;
 using Windows.Devices.Midi;
+using Windows.Storage;
+using Windows.Storage.Streams;
 using Windows.UI;
 
 // To learn more about WinUI, the WinUI project structure,
@@ -17,12 +21,14 @@ namespace SpaceOudacity
     public sealed partial class MainWindow : Window
     {
         private const int maxHue = 359;
-        private Color currentColor;
         private readonly DeviceWatcher deviceWatcher;
         private readonly string deviceFilter = MidiOutPort.GetDeviceSelector();
         private IMidiOutPort midiOutPort;
         private readonly double minHueWavelength = HueToWavelength(0);
         private readonly double minMaxHueWaveLengthDelta = HueToWavelength(maxHue) - HueToWavelength(0);
+
+        private CanvasBitmap canvasBitmap;
+
 
         public MainWindow()
         {
@@ -35,6 +41,8 @@ namespace SpaceOudacity
             deviceWatcher.Start();
             colorPicker.Color = Colors.Red;
         }
+
+        public Color CurrentColor { get; set; }
 
         private void DeviceWatcher_Added(DeviceWatcher sender, DeviceInformation args)
         {
@@ -61,13 +69,15 @@ namespace SpaceOudacity
             });
         }
 
-        private void canvas_Draw(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.Xaml.CanvasDrawEventArgs args)
+        private async void canvas_Draw(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.Xaml.CanvasDrawEventArgs args)
         {
-            const float rectWidth = 200;
-            const float rectHeight = 200;
-
-            var brush = new CanvasSolidColorBrush(sender.Device, currentColor);
-            args.DrawingSession.FillRectangle((float)(sender.ActualWidth / 2) - (rectWidth / 2), (float)(sender.ActualHeight / 2) - (rectHeight / 2), rectWidth, rectHeight, brush);
+            if (canvasBitmap != null)
+            {
+                var scaleWidth = (float)sender.ActualWidth / canvasBitmap.SizeInPixels.Width;
+                args.DrawingSession.Transform = Matrix3x2.CreateScale(scaleWidth);
+                args.DrawingSession.DrawImage(canvasBitmap);
+                args.DrawingSession.Transform = Matrix3x2.CreateScale(1f);
+            }
         }
 
         private void colorPicker_ColorChanged(Microsoft.UI.Xaml.Controls.ColorPicker sender, Microsoft.UI.Xaml.Controls.ColorChangedEventArgs args)
@@ -78,10 +88,10 @@ namespace SpaceOudacity
 
         private MidiNoteOnMessage ColorToMidiNote(Color color)
         {
-            var (h, _, v) = RGBToHSV(color);
+            var (h, s, v) = RGBToHSV(color);
             var wave = HueToWavelength(h); ;
             var note = LightWaveToMidiNote(wave);
-            return new MidiNoteOnMessage(10, note, (byte)(v * 127));
+            return new MidiNoteOnMessage(10, note, (byte)((s + v) / 2 * 127));
         }
 
         private byte LightWaveToMidiNote(double wavelength)
@@ -102,9 +112,9 @@ namespace SpaceOudacity
 
         private void UpdateColor(Color newColor)
         {
-            currentColor = newColor;
+            CurrentColor = newColor;
 
-            var (h, _, _) = RGBToHSV(currentColor);
+            var (h, _, _) = RGBToHSV(CurrentColor);
 
             var midiNote = ColorToMidiNote(newColor);
             canvas.Invalidate();
@@ -146,6 +156,44 @@ namespace SpaceOudacity
             }
 
             return (h, s, v / 255);
+        }
+
+        private async void canvas_CreateResources(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesEventArgs args)
+        {
+            var path = @"E:\SpaceApps\Nebula\Orion00108552.tif";
+
+            // using IRandomAccessStream fileStream = await ImageFile.OpenReadAsync();
+
+            // var decoder = await BitmapDecoder.CreateAsync(fileStream);
+
+            // var pixelData = await decoder.GetPixelDataAsync(
+            //    BitmapPixelFormat.Bgra8, // WriteableBitmap uses BGRA format 
+            //    BitmapAlphaMode.Straight,
+            //    new BitmapTransform(),
+            //    ExifOrientationMode.IgnoreExifOrientation, // This sample ignores Exif orientation 
+            //    ColorManagementMode.DoNotColorManage
+            //);
+
+            var img = await StorageFile.GetFileFromPathAsync(path);
+            using IRandomAccessStream stream = await img.OpenReadAsync();
+            canvasBitmap = await CanvasBitmap.LoadAsync(canvas.Device, stream);
+            DispatcherQueue.TryEnqueue(() => canvas.Invalidate());
+
+        }
+
+        private void canvas_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            var canvasSender = sender as CanvasControl;
+
+            var point = e.GetCurrentPoint(sender as UIElement);
+
+            var scaleWidth = canvasBitmap.Bounds.Width / canvasSender.ActualWidth;
+
+            var pixelColors = canvasBitmap.GetPixelColors((int)(point.Position.X * scaleWidth), (int)(point.Position.Y * scaleWidth), 1, 1);
+
+            var pixelColor = pixelColors[0];
+
+            DispatcherQueue.TryEnqueue(() => colorPicker.Color = pixelColors[0]);
         }
     }
 }
