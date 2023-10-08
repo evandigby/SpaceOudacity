@@ -4,18 +4,18 @@ namespace Processing
 {
     public class Find
     {
-        public static KeyPoint[] Circles(InputArray inputArray)
+        public static KeyPoint[] Circles(Mat img)
         {
             var p = new SimpleBlobDetector.Params
             {
-                FilterByColor = false,
-
+                FilterByColor = true,
+                BlobColor = 255,
             };
 
             using var sbd = SimpleBlobDetector.Create(p);
 
 
-            return sbd.Detect(inputArray.GetMat());
+            return sbd.Detect(img);
         }
     }
 }

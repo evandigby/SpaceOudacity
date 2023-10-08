@@ -8,10 +8,10 @@ using NAudio.Wave.SampleProviders;
 using Processing;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
+using System.Threading.Tasks;
 using Windows.Foundation;
-using Windows.Storage;
-using Windows.Storage.Streams;
 using Windows.UI;
 
 // To learn more about WinUI, the WinUI project structure,
@@ -29,11 +29,12 @@ namespace SpaceOudacity
         private readonly double minHueWavelength = HueToWavelength(0);
         private readonly double minMaxHueWaveLengthDelta = HueToWavelength(maxHue) - HueToWavelength(0);
         private readonly WaveOutEvent waveOut = new WaveOutEvent();
-        private readonly MixingSampleProvider mixer;
+        private MixingSampleProvider mixer;
 
         private readonly List<OpenCvSharp.KeyPoint> starCentroids = new List<OpenCvSharp.KeyPoint>();
-
         private CanvasBitmap canvasBitmap;
+        private OpenCvSharp.Mat imageMat;
+        private OpenCvSharp.Mat greyscaleImageMat;
 
 
         public MainWindow()
@@ -46,7 +47,7 @@ namespace SpaceOudacity
             midiOutPort = new(0);
         }
 
-        private async void canvas_Draw(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.Xaml.CanvasDrawEventArgs args)
+        private void canvas_Draw(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.Xaml.CanvasDrawEventArgs args)
         {
             if (canvasBitmap != null)
             {
@@ -76,7 +77,7 @@ namespace SpaceOudacity
 
         private ISampleProvider ColorToSignal(Color color, double gain)
         {
-            var (h, s, v) = RGBToHSV(color);
+            var (h, _, _) = RGBToHSV(color);
             var wave = HueToWavelength(h); ;
             return LightWaveToSignal(wave, gain);
         }
@@ -98,7 +99,7 @@ namespace SpaceOudacity
                 Gain = gain,
                 Frequency = frequency,
                 Type = SignalGeneratorType.Sin,
-            }.Take(TimeSpan.FromSeconds(5));
+            }.Take(TimeSpan.FromSeconds(20));
         }
 
         private byte LightWaveToMidiNote(double wavelength)
@@ -162,31 +163,38 @@ namespace SpaceOudacity
             return (h, s, v / 255);
         }
 
-        private async void canvas_CreateResources(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesEventArgs args)
+        private async Task LoadImage()
         {
             var path = @"E:\SpaceApps\Nebula\Orion00108552.tif";
 
-            var img = await StorageFile.GetFileFromPathAsync(path);
-            using IRandomAccessStream stream = await img.OpenReadAsync();
-            canvasBitmap = await CanvasBitmap.LoadAsync(canvas.Device, stream);
-
-            var pixels = canvasBitmap.GetPixelColors();
-
-            var pixelData = new byte[canvasBitmap.SizeInPixels.Height, canvasBitmap.SizeInPixels.Width];
-
-            for (int i = 0; i < pixels.Length; i++)
+            if (imageMat is not null)
             {
-                var x = i % canvasBitmap.SizeInPixels.Width;
-                var y = i / canvasBitmap.SizeInPixels.Width;
-
-                var pixel = pixels[i];
-                //var (h, s, v) = RGBToHSV(pixel);
-                pixelData[y, x] = pixel.B; // (byte)(pixel.B > 150 ? 255 : 0);
+                imageMat.Dispose();
             }
 
-            using var array = OpenCvSharp.InputArray.Create(pixelData);
+            imageMat = OpenCvSharp.Cv2.ImRead(path, OpenCvSharp.ImreadModes.Color);
 
-            var circles = Find.Circles(array);
+            var rows = imageMat.Rows;
+            var cols = imageMat.Cols;
+
+            var typ = imageMat.Type();
+
+            if (greyscaleImageMat is not null)
+            {
+                greyscaleImageMat.Dispose();
+            }
+            greyscaleImageMat = new(rows, cols, OpenCvSharp.MatType.CV_8UC1);
+
+            OpenCvSharp.Cv2.ExtractChannel(imageMat, greyscaleImageMat, 0);
+
+            canvasBitmap = await CanvasBitmap.LoadAsync(canvas.Device, path);
+        }
+
+        private async void canvas_CreateResources(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesEventArgs args)
+        {
+            await LoadImage();
+
+            var circles = Find.Circles(greyscaleImageMat);
 
             DispatcherQueue.TryEnqueue(() =>
             {
@@ -213,30 +221,35 @@ namespace SpaceOudacity
 
         private void playImage_Click(object sender, RoutedEventArgs e)
         {
-            var gain = 1d / starCentroids.Count;
-            foreach (var cent in starCentroids)
+            var gain = 1d;
+
+            var centroids = starCentroids;
+
+            var max = centroids.Max(c => c.Size);
+            var min = centroids.Min(c => c.Size);
+            var delta = max - min;
+
+            foreach (var cent in centroids)
             {
                 var pixelColors = canvasBitmap.GetPixelColors((int)cent.Pt.X, (int)cent.Pt.Y, 1, 1);
                 var pixelColor = pixelColors[0];
 
-                //var signal = ColorToSignal(pixelColor, gain);
+                var scale = gain * ((float)(cent.Size - min) / delta);
 
-                //var scaleWidth = cent.Pt.X / canvasBitmap.SizeInPixels.Width;
-                //var stereo = new PanningSampleProvider(signal.ToMono())
-                //{
-                //    Pan = (2 * (float)scaleWidth) - 1
-                //};
+                var signal = ColorToSignal(pixelColor, scale);
 
-                //mixer ??= new MixingSampleProvider(stereo.WaveFormat);
-
-                //mixer.AddMixerInput(stereo);
-
-                if (midiOutPort != null)
+                var scaleWidth = cent.Pt.X / canvasBitmap.SizeInPixels.Width;
+                var stereo = new PanningSampleProvider(signal.ToMono())
                 {
-                    var midiNote = ColorToNote(pixelColor);
-                    midiOutPort.Send(midiNote.GetAsShortMessage());
-                }
+                    Pan = (2 * (float)scaleWidth) - 1
+                };
+
+                mixer ??= new MixingSampleProvider(stereo.WaveFormat);
+
+                mixer.AddMixerInput(stereo);
             }
+
+            WaveFileWriter.CreateWaveFile(@"E:\SpaceApps\test.wav", mixer.ToWaveProvider());
 
             //if (waveOut.PlaybackState != PlaybackState.Playing)
             //{
