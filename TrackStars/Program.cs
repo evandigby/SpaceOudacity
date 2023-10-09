@@ -1,18 +1,22 @@
 ﻿// See https://aka.ms/new-console-template for more information
 using OpenCvSharp;
+using OpenCvSharp.Features2D;
 
-const int maxFrames = 7 * 30;
+const int maxFrames = 3 * 30;
 
-using var orb = ORB.Create(5000, 1.2f, 8, 20, 0, 4, ORBScoreType.Harris, 20, 10);
+using var orb = ORB.Create(500); // 5000, 1.2f, 8, 31, 0, 4, ORBScoreType.Harris, 31, 10);
 
 var p = new SimpleBlobDetector.Params
 {
     FilterByColor = true,
     BlobColor = 255,
-    MinArea = 1,
+    MinArea = 3,
 };
 
-using var bf = new BFMatcher(NormTypes.Hamming2);
+
+using var sift = SIFT.Create(100);
+
+using var bf = new BFMatcher(NormTypes.Hamming);
 
 using var sbd = SimpleBlobDetector.Create(p);
 
@@ -22,36 +26,45 @@ var secondToFirst = new Dictionary<int, int>();
 
 using (var capture = VideoCapture.FromFile(@"E:\SpaceApps\NebulaVideo.mov"))
 {
-    using var greyscaleImageMat = new Mat();
-    using var blur = new Mat();
-    using var thresh = new Mat();
-    using var outImg = new Mat();
     var descriptorsLast = new Mat();
     KeyPoint[]? keypointsLast = null;
+    Mat? lastThresh = null;
 
     using var output = new VideoWriter(@"E:\SpaceApps\NebulaVideoOutputDetection.avi", FourCC.WMV1, capture.Fps, new Size(capture.FrameWidth, capture.FrameHeight), true);
 
     for (int i = 0; i < maxFrames; i++)
     {
+        //using var greyscaleImageMat = new Mat();
+        using var blur = new Mat();
+        using var outImg = new Mat();
+
+        var thresh = new Mat();
+
         var currentFrame = capture.PosFrames;
         using var img = capture.RetrieveMat();
         if (img.Empty()) break;
 
-        Cv2.ExtractChannel(img, greyscaleImageMat, 0);
-        Cv2.GaussianBlur(greyscaleImageMat, blur, new Size(5, 5), 0);
-        Cv2.Threshold(blur, thresh, 200, 255, ThresholdTypes.Binary);
+        Cv2.ExtractChannel(img, thresh, 0);
+        //Cv2.GaussianBlur(greyscaleImageMat, blur, new Size(5, 5), 0);
+        //Cv2.Threshold(blur, thresh, 200, 255, ThresholdTypes.Binary);
 
         var keypoints = sbd.Detect(thresh);
 
         var descriptors = new Mat();
         orb.Compute(thresh, ref keypoints, descriptors);
         Cv2.DrawKeypoints(thresh, keypoints, outImg, Scalar.Red, DrawMatchesFlags.DrawRichKeypoints);
-
         var newSecondToFirst = new Dictionary<int, int>();
 
         if (i > 0 && keypointsLast != null)
         {
-            var matches = bf.Match(descriptorsLast, descriptors).OrderBy(m => m.Distance).DistinctBy(d => d.TrainIdx).ToArray();
+            var matches = bf.KnnMatch(descriptorsLast, descriptors, 1).Select(m => m[0]).OrderByDescending(m => m.Distance).ToArray();
+
+            //if (lastThresh != null)
+            //{
+            //    using var outMatchImage = new Mat();
+            //    Cv2.DrawMatches(lastThresh, keypointsLast, thresh, keypoints, matches, outMatchImage, Scalar.Red, flags: DrawMatchesFlags.DrawRichKeypoints);
+            //    Cv2.ImWrite($@"E:\SpaceApps\Test\{i}.jpg", outMatchImage);
+            //}
 
             var frame1 = i - 1;
             var frame2 = i;
@@ -59,6 +72,7 @@ using (var capture = VideoCapture.FromFile(@"E:\SpaceApps\NebulaVideo.mov"))
             foreach (var match in matches)
             {
                 MatchObject matchObject;
+
                 if (secondToFirst.TryGetValue(match.QueryIdx, out var matchObjectIndex))
                 {
                     matchObject = matchObjects[matchObjectIndex];
@@ -77,24 +91,75 @@ using (var capture = VideoCapture.FromFile(@"E:\SpaceApps\NebulaVideo.mov"))
                     matchObjectIndex = matchObjects.Count;
                     matchObjects.Add(matchObject);
                 }
-                matchObject.Index[frame2] = match.TrainIdx;
-                matchObject.KeyPoints[frame2] = keypoints[match.TrainIdx];
-                newSecondToFirst[match.TrainIdx] = matchObjectIndex;
+
+                DMatch? bestMatch = matchObject.Matches[frame2];
+
+                if (bestMatch is not null)
+                {
+                    bestMatch = match.Distance > bestMatch.Value.Distance ? bestMatch : match;
+                }
+
+                bestMatch ??= match;
+
+                matchObject.Matches[frame2] = bestMatch;
+                matchObject.Index[frame2] = bestMatch.Value.TrainIdx;
+                matchObject.KeyPoints[frame2] = keypoints[bestMatch.Value.TrainIdx];
+                newSecondToFirst[bestMatch.Value.TrainIdx] = matchObjectIndex;
             }
 
             output.Write(outImg);
         }
 
         secondToFirst = newSecondToFirst;
+        descriptorsLast?.Dispose();
+        lastThresh?.Dispose();
+        lastThresh = thresh;
         descriptorsLast = descriptors;
         keypointsLast = keypoints;
         Console.WriteLine($"Detected frame {i}");
     }
 }
 
-var matchObjectWithAllFrames = matchObjects.OrderByDescending(mo => mo.KeyPoints.Count(kp => kp is not null)).Take(10);
+var matchObjectWithAllFrames = matchObjects.OrderByDescending(mo => mo.KeyPoints.Count(kp => kp is not null)).Take(20).ToArray();
 
-var test = matchObjects.OrderByDescending(mo => mo.KeyPoints.Count(kp => kp is not null)).Take(10).Select(i => new { Count = i.KeyPoints.Count(kp => kp is not null), i.KeyPoints }).ToArray();
+var test = matchObjects
+    .OrderByDescending(mo => mo.KeyPoints.Count(kp => kp is not null))
+    .Select(i => new { Count = i.KeyPoints.Count(kp => kp is not null), i })
+    .Where(i => i.Count > 100)
+    .ToArray();
+
+var good = new List<MatchObject>();
+
+foreach (var obj in test)
+{
+    var longest = 0;
+    var current = 0;
+    foreach (var kp in obj.i.KeyPoints)
+    {
+        if (kp == null)
+        {
+            if (current > longest)
+            {
+                longest = current;
+            }
+            current = 0;
+        }
+        else
+        {
+            current++;
+        }
+    }
+
+    if (current > longest)
+    {
+        longest = current;
+    }
+
+    if (longest >= 100)
+    {
+        good.Add(obj.i);
+    }
+}
 
 
 using (var capture = VideoCapture.FromFile(@"E:\SpaceApps\NebulaVideo.mov"))
@@ -108,11 +173,13 @@ using (var capture = VideoCapture.FromFile(@"E:\SpaceApps\NebulaVideo.mov"))
 
         using var outImg = new Mat();
 
-        var matchCount = matchObjectWithAllFrames.Where(o => o.KeyPoints[i] is not null).Select(o => o.KeyPoints[i]).Cast<KeyPoint>();
+        var matchedWithNotNull = matchObjectWithAllFrames.Where(o => o.KeyPoints[i] is not null).ToArray();
 
-        if (matchCount.Count() > 0)
+        var matchedKeyPoints = matchedWithNotNull.Select(o => o.KeyPoints[i]).Cast<KeyPoint>().ToArray();
+
+        if (matchedKeyPoints.Length > 0)
         {
-            Cv2.DrawKeypoints(img, matchCount, outImg, Scalar.Purple, DrawMatchesFlags.DrawRichKeypoints);
+            Cv2.DrawKeypoints(img, matchedKeyPoints, outImg, Scalar.Purple, DrawMatchesFlags.DrawRichKeypoints);
             output.Write(outImg);
         }
         else
@@ -180,10 +247,12 @@ internal class MatchObject
     {
         Index = Enumerable.Range(0, numFrames).Select(_ => -1).ToArray();
         KeyPoints = new KeyPoint?[numFrames];
+        Matches = new DMatch?[numFrames];
     }
 
     public int[] Index { get; }
     public KeyPoint?[] KeyPoints { get; }
+    public DMatch?[] Matches { get; }
 }
 
 
