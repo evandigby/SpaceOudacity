@@ -2,7 +2,6 @@
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using OpenCvSharp;
-using OpenCvSharp.Features2D;
 
 const int maxFrames = 30 * 30;
 const int maxHue = 359;
@@ -25,8 +24,6 @@ var p = new SimpleBlobDetector.Params
     MinArea = 3,
 };
 
-
-using var sift = SIFT.Create(100);
 
 using var bf = new BFMatcher(NormTypes.Hamming);
 

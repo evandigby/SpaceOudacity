@@ -40,11 +40,12 @@ namespace SpaceOudacity
         public MainWindow()
         {
             InitializeComponent();
-            //UpdateColorPosition(colorPicker.Color);
 
             colorPicker.Color = Colors.Red;
 
             midiOutPort = new(0);
+            var test = new ControlChangeEvent(0, 1, MidiController.MainVolume, 127);
+            midiOutPort.Send(test.GetAsShortMessage());
         }
 
         private void canvas_Draw(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender, Microsoft.Graphics.Canvas.UI.Xaml.CanvasDrawEventArgs args)
@@ -60,11 +61,6 @@ namespace SpaceOudacity
                 }
             }
         }
-
-        //private void colorPicker_ColorChanged(Microsoft.UI.Xaml.Controls.ColorPicker sender, Microsoft.UI.Xaml.Controls.ColorChangedEventArgs args)
-        //{
-        //    DispatcherQueue.TryEnqueue(() => UpdateColorPosition(args.NewColor));
-        //}
 
 
         private NoteOnEvent ColorToNote(Color color)
@@ -89,7 +85,7 @@ namespace SpaceOudacity
             var waveRatio = minimized / minMaxHueWaveLengthDelta;
 
             const double pianoMinFrequency = 27.5d;
-            const double pianoMaxFrequency = 4186.009d;
+            const double pianoMaxFrequency = 1000d;
             const double pianoDelta = pianoMaxFrequency - pianoMinFrequency;
 
             var frequency = (waveRatio * pianoDelta) - pianoMinFrequency;
@@ -99,7 +95,7 @@ namespace SpaceOudacity
                 Gain = gain,
                 Frequency = frequency,
                 Type = SignalGeneratorType.Sin,
-            }.Take(TimeSpan.FromSeconds(20));
+            }.Take(TimeSpan.FromSeconds(10));
         }
 
         private byte LightWaveToMidiNote(double wavelength)
@@ -221,9 +217,9 @@ namespace SpaceOudacity
 
         private void playImage_Click(object sender, RoutedEventArgs e)
         {
-            var gain = 1d;
+            var gain = 0.25d;
 
-            var centroids = starCentroids;
+            var centroids = starCentroids.Take(10);
 
             var max = centroids.Max(c => c.Size);
             var min = centroids.Min(c => c.Size);
@@ -249,13 +245,11 @@ namespace SpaceOudacity
                 mixer.AddMixerInput(stereo);
             }
 
-            WaveFileWriter.CreateWaveFile(@"E:\SpaceApps\test.wav", mixer.ToWaveProvider());
-
-            //if (waveOut.PlaybackState != PlaybackState.Playing)
-            //{
-            //    waveOut.Init(mixer);
-            //    waveOut.Play();
-            //}
+            if (waveOut.PlaybackState != PlaybackState.Playing)
+            {
+                waveOut.Init(mixer);
+                waveOut.Play();
+            }
         }
     }
 }
