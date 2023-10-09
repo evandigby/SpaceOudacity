@@ -4,7 +4,7 @@ using NAudio.Wave.SampleProviders;
 using OpenCvSharp;
 using OpenCvSharp.Features2D;
 
-const int maxFrames = 100 * 30;
+const int maxFrames = 30 * 30;
 const int maxHue = 359;
 double minHueWavelength = HueToWavelength(0);
 double minMaxHueWaveLengthDelta = HueToWavelength(maxHue) - HueToWavelength(0);
